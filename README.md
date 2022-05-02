@@ -1,6 +1,6 @@
 # Minefield
 
-This is the PoC implementation for the USENIX 2022 paper **Minefield: A Software-only Protection for SGX Enclaves against DVFS Attacks** by Andreas Kogler, Daniel Gruss, and Michael Schwarz.
+This is the PoC implementation for the USENIX 2022 paper [**Minefield: A Software-only Protection for SGX Enclaves against DVFS Attacks**](https://andreaskogler.com/papers/minefield.pdf) by [Andreas Kogler](https://andreaskogler.com), [Daniel Gruss](https://gruss.cc), and [Michael Schwarz](https://misc0110.net).
 
 This Readme walks you through compiling a modified **clang compiler**, the **SGX driver**, the modified **SGX SDK**, and finally, the benchmarks.
 The modified compiler and SDK comprise Minefield, which allows you to harden SGX enclaves against undervolting.

@@ -103,22 +103,22 @@ The scripts are:
 - [./scripts/benchmarks_run_size.sh](./scripts/benchmarks_run_size.sh) runs the **size** benchmark (Figure 10)
 - [./scripts/benchmarks_run_ctime.sh](./scripts/benchmarks_run_ctime.sh) runs the **compile time** benchmark (Figure 11)
 
-Each of the scripts (except the **size** benchmark, see below) stores the results in a generated `results_BENCHMARK_DATE` folder which must be further processed to obtain the results. This allows to split evaluation and analysis (see **3 Visualization**). If you're only interested in a quick check, you can shorten the **sgx-nbench** runtime (see **4 Customization**).
+Each of the scripts (except the **size** benchmark, see below) stores the results in a generated `results_${BENCHMARK}_${DATE}` folder which must be further processed to obtain the results. This allows to split evaluation and analysis (see **3 Visualization**). If you're only interested in a quick check, you can shorten the **sgx-nbench** runtime (see **4 Customization**).
 
 As the **size** benchmark is deterministic, making the split unnecessary. The **size results** are stored in `meta.csv` without an automatically generated results folder.
 
 # 3 Visualization
-To convert the results of the `results_BENCHMARK_DATE` folders into CSV format, we provide additional scripts:
+To convert the results of the `results_${BENCHMARK}_${DATE}` folders into CSV format, we provide additional scripts:
 
-- `./scripts/benchmarks_to_csv_nbench.sh result_nbench_DATE` generates `result_nbench_DATE/results.csv`
-- `./scripts/benchmarks_to_csv_ctime.sh result_ctime_DATE` generates `result_ctime_DATE/results.csv`
-- `./scripts/benchmarks_to_csv_mbedtls.sh result_mbedtls_DATE` generates `result_mbedtls_DATE/results.csv`
+- `./scripts/benchmarks_to_csv_nbench.sh result_nbench_${DATE}` generates `result_nbench_${DATE}/results.csv`
+- `./scripts/benchmarks_to_csv_ctime.sh result_ctime_${DATE}` generates `result_ctime_${DATE}/results.csv`
+- `./scripts/benchmarks_to_csv_mbedtls.sh result_mbedtls_${DATE}` generates `result_mbedtls_${DATE}/results.csv`
  
 We also provide a conversion and plotting script to convert the absolute performance numbers of the `results.csv` files to relative performance numbers.
 
-- `./scripts/plot_csv.py result_nbench_DATE/results.csv` visualizes the **sgx-nbench** results.
-- `./scripts/plot_csv.py result_ctime_DATE/results.csv inv` visualizes the **compile time** results.
-- `./scripts/plot_csv.py result_mbedtls_DATE/results.csv inv` visualizes the **mbedTLS** results.
+- `./scripts/plot_csv.py result_nbench_${DATE}/results.csv` visualizes the **sgx-nbench** results.
+- `./scripts/plot_csv.py result_ctime_${DATE}/results.csv inv` visualizes the **compile time** results.
+- `./scripts/plot_csv.py result_mbedtls_${DATE}/results.csv inv` visualizes the **mbedTLS** results.
 - `./scripts/plot_csv.py meta.csv inv` visualizes the **size** results.
 
 Note: `inv` stands for inverted, i.e., whether **lower** is better or visa versa.

@@ -32,14 +32,14 @@ To run the native version, execute:
 
 ```
 cd imul
-./run_native start_voltage_offset 100000 core placement_density
+./run_native ${start_voltage_offset} 100000 ${core} ${placement_density}
 ```
 
 To run the SGX version, execute:
 
 ```
 cd imul
-./run_sgx start_voltage_offset 100000 core placement_density
+./run_sgx ${start_voltage_offset} 100000 ${core} ${placement_density}
 ```
 
 ## MbedTLS Benchmark
@@ -47,14 +47,14 @@ To run the native version, execute:
 
 ```
 cd mbedtls
-./run_native start_voltage_offset 2000 core placement_density
+./run_native ${start_voltage_offset} 2000 ${core} ${placement_density}
 ```
 
 To run the SGX version, execute:
 
 ```
 cd mbedtls
-./run_sgx start_voltage_offset 2000 core placement_density
+./run_sgx ${start_voltage_offset} 2000 ${core} ${placement_density}
 ```
 
 ## Example:

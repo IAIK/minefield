@@ -1,0 +1,16 @@
+enclave {
+    untrusted {
+        void ocall_undervolt_begin();
+        void ocall_undervolt_end();
+
+        void ocall_puts([in, string] const char *str);
+    };
+
+    trusted {
+        public void ecall_experiment(uint64_t iterations, int64_t random_value, int64_t random_init);
+        public void ecall_print_results(uint64_t current_iteration);
+    };
+    
+};
+
+

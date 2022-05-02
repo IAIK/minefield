@@ -1,0 +1,14 @@
+enclave {
+	trusted {
+		public void crypto_init(int key);
+		public void crypto_clear();
+		public void enclave_crypto_run();
+		public void enclave_crypto_run_no_check();
+		public int crypto_is_faulted();
+		public int mitigation_is_faulted();
+		public void test_ocall();
+	};
+	untrusted {
+		void ocall_print_string([in, string] const char *str);
+	};
+};

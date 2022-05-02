@@ -1,0 +1,555 @@
+Only in sgxbench1/.: autom4te.cache
+diff --color -ur sgxbench/./Enclave/Enclave.c sgxbench1/./Enclave/Enclave.c
+--- sgxbench/./Enclave/Enclave.c	2018-08-07 10:57:34.000000000 +0200
++++ sgxbench1/./Enclave/Enclave.c	2022-05-02 16:32:45.735526000 +0200
+@@ -1,40 +1,53 @@
+-#include "Enclave_t.h"
+ #include "Enclave.h"
+ 
++#include "Enclave_t.h"
++
+ #include <sgx_trts.h>
+ 
+ #ifdef ENCLAVE_HOLESIZE
+-static char hole[ENCLAVE_HOLESIZE] = {0};
++static char hole[ENCLAVE_HOLESIZE] = { 0 };
+ #endif
+ 
+-static unsigned long long int_enc_buffer[ENCLAVE_INT_ENC_BUFFER_COUNT] = {0};
++static unsigned long long int_enc_buffer[ENCLAVE_INT_ENC_BUFFER_COUNT] = { 0 };
++
++uint64_t volatile __fault_count   = 0;
++uint64_t volatile __fault_pending = 0;
++uint64_t volatile __fault_mul_factor = 0x2bbb871;
++
++void __attribute__((naked)) __fault_abort(void) {
++    asm volatile("ud2");
++}
+ 
+ inline __attribute__((always_inline)) void clflush_range(volatile void *p, size_t size) {
++    __builtin___clear_cache(p, (volatile char *)p + size);
++    /*
+     for (size_t i = 0; i < size; i += 64) {
+-        volatile void *pi = p + i;
+-        asm volatile ("clflush (%0)" :: "r"(pi));
+-    }
+-    asm volatile ("mfence");
++        volatile void *pi = (volatile char *)p + i;
++
++        asm volatile ("clflush %%gs:(%0)" :: "r"(pi));
++    }*/
++    asm volatile("mfence");
+ }
+ 
+ inline __attribute__((always_inline)) uint64_t clearcache(void *buf, size_t size) {
+-    uint64_t sum;
+-    size_t count = size / sizeof(uint64_t);
+-    volatile uint64_t *p = buf;
+-    while (count--) {
++    uint64_t           sum;
++    size_t             count = size / sizeof(uint64_t);
++    volatile uint64_t *p     = (volatile uint64_t *)buf;
++    while ( count-- ) {
+         sum += *p;
+         *p++ = 0;
+     }
+-    asm volatile ("mfence");
++    asm volatile("mfence");
+     return sum;
+ }
+ 
+ #ifdef ENCLAVE_HOLESIZE
+ int sb_hello(size_t pos) {
+-    if (pos < ENCLAVE_HOLESIZE) {
++    if ( pos < ENCLAVE_HOLESIZE ) {
+         hole[pos]++;
+         return 0x1233 + hole[pos];
+-    } else {
++    }
++    else {
+         return 0x1234;
+     }
+ }
+@@ -50,9 +63,9 @@
+ }
+ 
+ unsigned long long sb_ein(unsigned long long *array, size_t count) {
+-    unsigned long long sum = 0;
+-    volatile unsigned long long *p = array;
+-    while (count--) {
++    unsigned long long           sum = 0;
++    volatile unsigned long long *p   = array;
++    while ( count-- ) {
+         sum += *p++;
+     }
+     return sum;
+@@ -60,15 +73,15 @@
+ 
+ void sb_eout(unsigned long long *array, size_t count) {
+     volatile unsigned long long *p = array;
+-    while (count--) {
++    while ( count-- ) {
+         *p++ = 0;
+     }
+ }
+ 
+ unsigned long long sb_einout(unsigned long long *array, size_t count) {
+-    unsigned long long sum = 0;
+-    volatile unsigned long long *p = array;
+-    while (count--) {
++    unsigned long long           sum = 0;
++    volatile unsigned long long *p   = array;
++    while ( count-- ) {
+         sum += *p;
+         *p++ = 0;
+     }
+@@ -78,7 +91,7 @@
+ // ####################################################################################################################
+ 
+ void sb_ompty_start(long long *results, int warmupsize, int realrunsize) {
+-    for (int i = 0; i < warmupsize + realrunsize; i++) {
++    for ( int i = 0; i < warmupsize + realrunsize; i++ ) {
+         unsigned long long a, b;
+         sb_rdtscp(&a);
+         sb_rdtscp(&b);
+@@ -87,7 +100,7 @@
+ }
+ 
+ void sb_ompty2_start(long long *results, int warmupsize, int realrunsize, void *defeat, size_t defeatsize) {
+-    for (int i = 0; i < warmupsize + realrunsize; i++) {
++    for ( int i = 0; i < warmupsize + realrunsize; i++ ) {
+         unsigned long long a, b, sum;
+         sb_defeat(&sum, defeat, defeatsize);
+         sb_rdtscp(&a);
+@@ -96,9 +109,10 @@
+     }
+ }
+ 
+-unsigned long long sb_oin(long long *results, unsigned long long *array, size_t count, int warmupsize, int realrunsize) {
++unsigned long long sb_oin(long long *results, unsigned long long *array, size_t count, int warmupsize,
++                          int realrunsize) {
+     unsigned long long a, b, sum = 0;
+-    for (int i = 0; i < warmupsize + realrunsize; i++) {
++    for ( int i = 0; i < warmupsize + realrunsize; i++ ) {
+         sb_rdtscp(&a);
+         sb_oin_ocall(&b, array, count);
+         results[i] = b - a;
+@@ -106,9 +120,10 @@
+     return sum;
+ }
+ 
+-unsigned long long sb_oin2(long long *results, unsigned long long *array, size_t count, int warmupsize, int realrunsize) {
++unsigned long long sb_oin2(long long *results, unsigned long long *array, size_t count, int warmupsize,
++                           int realrunsize) {
+     unsigned long long a, b, sum = 0;
+-    for (int i = 0; i < warmupsize + realrunsize; i++) {
++    for ( int i = 0; i < warmupsize + realrunsize; i++ ) {
+         clflush_range(array, count * sizeof(unsigned long long));
+         sb_rdtscp(&a);
+         sb_oin_ocall(&b, array, count);
+@@ -119,7 +134,7 @@
+ 
+ void sb_oout(long long *results, unsigned long long *array, size_t count, int warmupsize, int realrunsize) {
+     unsigned long long a, b;
+-    for (int i = 0; i < warmupsize + realrunsize; i++) {
++    for ( int i = 0; i < warmupsize + realrunsize; i++ ) {
+         sb_rdtscp(&a);
+         sb_oout_ocall(&b, array, count);
+         results[i] = b - a;
+@@ -128,7 +143,7 @@
+ 
+ void sb_oout2(long long *results, unsigned long long *array, size_t count, int warmupsize, int realrunsize) {
+     unsigned long long a, b;
+-    for (int i = 0; i < warmupsize + realrunsize; i++) {
++    for ( int i = 0; i < warmupsize + realrunsize; i++ ) {
+         clflush_range(array, count * sizeof(unsigned long long));
+         sb_rdtscp(&a);
+         sb_oout_ocall(&b, array, count);
+@@ -136,10 +151,11 @@
+     }
+ }
+ 
+-unsigned long long sb_oinout(long long *results, unsigned long long *array, size_t count, int warmupsize, int realrunsize) {
++unsigned long long sb_oinout(long long *results, unsigned long long *array, size_t count, int warmupsize,
++                             int realrunsize) {
+     unsigned long long a, b;
+     unsigned long long sum = 0;
+-    for (int i = 0; i < warmupsize + realrunsize; i++) {
++    for ( int i = 0; i < warmupsize + realrunsize; i++ ) {
+         sb_rdtscp(&a);
+         sb_oinout_ocall(&b, array, count);
+         results[i] = b - a;
+@@ -147,10 +163,11 @@
+     return sum;
+ }
+ 
+-unsigned long long sb_oinout2(long long *results, unsigned long long *array, size_t count, int warmupsize, int realrunsize) {
++unsigned long long sb_oinout2(long long *results, unsigned long long *array, size_t count, int warmupsize,
++                              int realrunsize) {
+     unsigned long long a, b;
+     unsigned long long sum = 0;
+-    for (int i = 0; i < warmupsize + realrunsize; i++) {
++    for ( int i = 0; i < warmupsize + realrunsize; i++ ) {
+         clflush_range(array, count * sizeof(unsigned long long));
+         sb_rdtscp(&a);
+         sb_oinout_ocall(&b, array, count);
+@@ -162,9 +179,10 @@
+ // ####################################################################################################################
+ 
+ // since rdtscp is not available inside enclave, measures ocall time + read time together
+-unsigned long long sb_enc_read(long long *results, unsigned long long *buf, size_t count, int warmupsize, int realrunsize) {
++unsigned long long sb_enc_read(long long *results, unsigned long long *buf, size_t count, int warmupsize,
++                               int realrunsize) {
+     unsigned long long sum = 0;
+-    for (int i = 0; i < warmupsize + realrunsize; i++) {
++    for ( int i = 0; i < warmupsize + realrunsize; i++ ) {
+         unsigned long long a, b;
+         // avoid overwriting count
+         unsigned long long n = count;
+@@ -173,7 +191,7 @@
+         sb_rdtscp(&a);
+ 
+         volatile unsigned long long *p = buf;
+-        while (n--) {
++        while ( n-- ) {
+             sum += *p++;
+         }
+ 
+@@ -185,7 +203,7 @@
+ 
+ // measures ocall time + write time together
+ void sb_enc_write(long long *results, unsigned long long *buf, size_t count, int warmupsize, int realrunsize) {
+-    for (int i = 0; i < warmupsize + realrunsize; i++) {
++    for ( int i = 0; i < warmupsize + realrunsize; i++ ) {
+         unsigned long long a, b;
+         // avoid overwriting count
+         unsigned long long n = count;
+@@ -193,7 +211,7 @@
+         sb_rdtscp(&a);
+ 
+         volatile unsigned long long *p = buf;
+-        while (n--) {
++        while ( n-- ) {
+             *p++ = 0;
+         }
+ 
+@@ -204,9 +222,9 @@
+ 
+ // measures ecall time + read time together
+ unsigned long long sb_plain_read(unsigned long long *buf, size_t count) {
+-    unsigned long long sum = 0;
+-    volatile unsigned long long *p = buf;
+-    while (count--) {
++    unsigned long long           sum = 0;
++    volatile unsigned long long *p   = buf;
++    while ( count-- ) {
+         sum += *p++;
+     }
+     return sum;
+@@ -215,7 +233,7 @@
+ // measures ecall time + write time together
+ void sb_plain_write(unsigned long long *buf, size_t count) {
+     volatile unsigned long long *p = buf;
+-    while (count--) {
++    while ( count-- ) {
+         *p++ = 0;
+     }
+ }
+@@ -225,10 +243,10 @@
+ // measures ocall time + read time together
+ unsigned long long sb_enc_read1(long long *results, unsigned long long *number, int warmupsize, int realrunsize) {
+     unsigned long long sum = 0;
+-    for (int i = 0; i < warmupsize + realrunsize; i++) {
++    for ( int i = 0; i < warmupsize + realrunsize; i++ ) {
+         unsigned long long a, b;
+-        asm volatile ("clflush (%0)" :: "r"(number));
+-        asm volatile ("mfence");
++        asm volatile("clflush (%0)" ::"r"(number));
++        asm volatile("mfence");
+         sb_rdtscp(&a);
+ 
+         volatile unsigned long long *p = number;
+@@ -242,14 +260,14 @@
+ 
+ // measures ocall time + write time together
+ void sb_enc_write1(long long *results, unsigned long long *number, int warmupsize, int realrunsize) {
+-    for (int i = 0; i < warmupsize + realrunsize; i++) {
++    for ( int i = 0; i < warmupsize + realrunsize; i++ ) {
+         unsigned long long a, b;
+-        asm volatile ("clflush (%0)" :: "r"(number));
+-        asm volatile ("mfence");
++        asm volatile("clflush (%0)" ::"r"(number));
++        asm volatile("mfence");
+         sb_rdtscp(&a);
+ 
+         volatile unsigned long long *p = number;
+-        *p = 0;
++        *p                             = 0;
+ 
+         sb_rdtscp(&b);
+         results[i] = b - a;
+@@ -265,7 +283,7 @@
+ // measures ecall time + write time together
+ void sb_plain_write1(unsigned long long *number) {
+     volatile unsigned long long *p = number;
+-    *p = 0;
++    *p                             = 0;
+ }
+ 
+ // ####################################################################################################################
+@@ -273,7 +291,7 @@
+ // since rdtscp is not available inside enclave, measures ocall time + read time together
+ unsigned long long sb_real_enc_read(long long *results, int warmupsize, int realrunsize) {
+     unsigned long long sum = 0;
+-    for (int i = 0; i < warmupsize + realrunsize; i++) {
++    for ( int i = 0; i < warmupsize + realrunsize; i++ ) {
+         unsigned long long a, b;
+         unsigned long long n = ENCLAVE_INT_ENC_BUFFER_COUNT;
+         // luckily we can CLFLUSH inside SGX
+@@ -281,7 +299,7 @@
+         sb_rdtscp(&a);
+ 
+         volatile unsigned long long *p = int_enc_buffer;
+-        while (n--) {
++        while ( n-- ) {
+             sum += *p++;
+         }
+ 
+@@ -293,14 +311,14 @@
+ 
+ // measures ocall time + write time together
+ void sb_real_enc_write(long long *results, int warmupsize, int realrunsize) {
+-    for (int i = 0; i < warmupsize + realrunsize; i++) {
++    for ( int i = 0; i < warmupsize + realrunsize; i++ ) {
+         unsigned long long a, b;
+         unsigned long long n = ENCLAVE_INT_ENC_BUFFER_COUNT;
+         clflush_range(int_enc_buffer, ENCLAVE_INT_ENC_BUFFER_COUNT * sizeof(unsigned long long));
+         sb_rdtscp(&a);
+ 
+         volatile unsigned long long *p = int_enc_buffer;
+-        while (n--) {
++        while ( n-- ) {
+             *p++ = 0;
+         }
+ 
+@@ -310,9 +328,10 @@
+ }
+ 
+ // since rdtscp is not available inside enclave, measures ocall time + read time together
+-unsigned long long sb_real_plain_read(long long *results, unsigned long long *buf, size_t count, int warmupsize, int realrunsize) {
++unsigned long long sb_real_plain_read(long long *results, unsigned long long *buf, size_t count, int warmupsize,
++                                      int realrunsize) {
+     unsigned long long sum = 0;
+-    for (int i = 0; i < warmupsize + realrunsize; i++) {
++    for ( int i = 0; i < warmupsize + realrunsize; i++ ) {
+         unsigned long long a, b;
+         // avoid overwriting count
+         unsigned long long n = count;
+@@ -321,7 +340,7 @@
+         sb_rdtscp(&a);
+ 
+         volatile unsigned long long *p = buf;
+-        while (n--) {
++        while ( n-- ) {
+             sum += *p++;
+         }
+ 
+@@ -333,7 +352,7 @@
+ 
+ // measures ocall time + write time together
+ void sb_real_plain_write(long long *results, unsigned long long *buf, size_t count, int warmupsize, int realrunsize) {
+-    for (int i = 0; i < warmupsize + realrunsize; i++) {
++    for ( int i = 0; i < warmupsize + realrunsize; i++ ) {
+         unsigned long long a, b;
+         // avoid overwriting count
+         unsigned long long n = count;
+@@ -341,7 +360,7 @@
+         sb_rdtscp(&a);
+ 
+         volatile unsigned long long *p = buf;
+-        while (n--) {
++        while ( n-- ) {
+             *p++ = 0;
+         }
+ 
+@@ -355,20 +374,20 @@
+ #ifdef ENCLAVE_HOLESIZE
+ #define SBRA_STEPSIZE 8
+ int sb_random_access(int runs) {
+-    if (ENCLAVE_HOLESIZE < (1 << SBRA_L2HOLESIZE)) {
++    if ( ENCLAVE_HOLESIZE < (1 << SBRA_L2HOLESIZE) ) {
+         return -1;
+     }
+-    if (sizeof(short) != 2 || runs % SBRA_STEPSIZE != 0) {
++    if ( sizeof(short) != 2 || runs % SBRA_STEPSIZE != 0 ) {
+         return -1;
+     }
+     uint32_t mask = (1 << SBRA_L2HOLESIZE) - 1;
+     uint32_t randoms[SBRA_STEPSIZE];
+-    for (int i = 0; i < runs; i += SBRA_STEPSIZE) {
++    for ( int i = 0; i < runs; i += SBRA_STEPSIZE ) {
+         sgx_read_rand((unsigned char *)randoms, SBRA_STEPSIZE * sizeof(uint32_t));
+-        for (int j = 0; j < SBRA_STEPSIZE; j++) {
+-            uint32_t address = randoms[j] & mask;
+-            volatile char *ptr = &hole[address];
+-            *ptr = 0;
++        for ( int j = 0; j < SBRA_STEPSIZE; j++ ) {
++            uint32_t       address = randoms[j] & mask;
++            volatile char *ptr     = &hole[address];
++            *ptr                   = 0;
+         }
+     }
+     return 0;
+Only in sgxbench1/./Enclave: Enclave_gs.config.xml
+diff --color -ur sgxbench/./Enclave/Makefile.in sgxbench1/./Enclave/Makefile.in
+--- sgxbench/./Enclave/Makefile.in	2018-08-07 10:57:34.000000000 +0200
++++ sgxbench1/./Enclave/Makefile.in	2022-05-02 16:32:45.735526000 +0200
+@@ -10,12 +10,17 @@
+ libdir=@libdir@
+ enclave_libdir=@enclave_libdir@
+ 
++SGX_MODE ?= HW
++SGX_ARCH ?= x64
++SGX_DEBUG ?= 1
++
++
+ ENCLAVE=Enclave
+ 
+ OBJS=$(ENCLAVE).o
+ 
+ %.o: %.c
+-	$(CC) $(CPPFLAGS) $(ENCLAVE_CPPFLAGS) $(CFLAGS) $(ENCLAVE_CFLAGS) -c $<
++	$(TR_CC) $(CPPFLAGS) $(ENCLAVE_CPPFLAGS) $(CFLAGS) $(ENCLAVE_CFLAGS) -c $<
+ 
+ all: $(ENCLAVE).so
+ 
+@@ -25,8 +30,10 @@
+ 
+ include ../sgx_enclave.mk
+ 
++
+ $(ENCLAVE).so: $(ENCLAVE_TOBJ) $(OBJS)
+-	$(CC) $(CFLAGS) -o $@ $(ENCLAVE_TOBJ) $(OBJS) $(LDFLAGS) $(ENCLAVE_LDFLAGS)
++	@$(TR_CXX) $(ENCLAVE_TOBJ) $(OBJS) -o $@ $(MITIGATION_LDFLAGS) $(Enclave_Security_Link_Flags) $(ENCLAVE_LDFLAGS)
++
+ 
+ clean:
+ 	rm -f $(OBJS) $(ENCLAVE_CLEAN) 
+diff --color -ur sgxbench/./main.c sgxbench1/./main.c
+--- sgxbench/./main.c	2018-08-07 10:57:34.000000000 +0200
++++ sgxbench1/./main.c	2022-05-02 16:32:45.735526000 +0200
+@@ -502,6 +502,9 @@
+             break;
+ 
+         case 204: // test enclave destroy, cold cache
++            warmupsize = 25;
++            batchsize = 1025;
++
+             ret |= sgx_destroy_enclave(eid);
+             for (int i = 0; i < batchsize; i++) {
+                 clearcache(defeat, CACHE_DEFEAT_COUNT);
+@@ -560,7 +563,7 @@
+     }
+ 
+     char outname[260];
+-    snprintf(outname, 250, "bench%d_%lu", select, (unsigned long)time(NULL));
++    snprintf(outname, 250, "results/bench%d", select);
+ 
+     FILE *output = fopen(outname, "w");
+     for (int i = warmupsize; i < batchsize; i++) {
+diff --color -ur sgxbench/./main.h sgxbench1/./main.h
+--- sgxbench/./main.h	2018-08-07 10:57:34.000000000 +0200
++++ sgxbench1/./main.h	2022-05-02 16:32:45.735526000 +0200
+@@ -1,18 +1,18 @@
+ #define ENCLAVE_NAME "Enclave/Enclave.signed.so"
+ 
+-#define WARMUPSIZE 10000
+-#define REALRUNSIZE 1000000
++#define WARMUPSIZE  100000
++#define REALRUNSIZE 1100000
+ //#define BATCHSIZE (WARMUPSIZE + REALRUNSIZE)
+ 
+ // for 2xx benchmarks
+-#define WARMUPSIZE2 1000
++#define WARMUPSIZE2  1000
+ #define REALRUNSIZE2 10000
+ //#define BATCHSIZE (WARMUPSIZE + REALRUNSIZE)
+ 
+ #define REALRUNSIZE_3XX 100000000
+-#define NUMTHREADS_3XX 1
++#define NUMTHREADS_3XX  1
+ 
+-#define CACHE_DEFEAT_SIZE (4 * 1024 * 1024)
++#define CACHE_DEFEAT_SIZE  (4 * 1024 * 1024)
+ #define CACHE_DEFEAT_COUNT (CACHE_DEFEAT_SIZE / sizeof(uint64_t))
+ 
+ #define DEFAULT_BUFSIZE 2048
+diff --color -ur sgxbench/./Makefile.in sgxbench1/./Makefile.in
+--- sgxbench/./Makefile.in	2018-08-07 10:57:34.000000000 +0200
++++ sgxbench1/./Makefile.in	2022-05-02 16:32:45.735526000 +0200
+@@ -24,6 +24,7 @@
+ 	$(CC) -c $(CPPFLAGS) $(CFLAGS) -I$(SGXSDK_INCDIR) $<
+ 
+ all: $(EXECUTABLE) $(SGX_ENCLAVES)
++	-mkdir results
+ 
+ install: install-program install-enclaves
+ 
+Only in sgxbench1/.: postprocess.py
+Only in sgxbench/.: sgxbench.patch
+diff --color -ur sgxbench/./sgx_enclave.mk.in sgxbench1/./sgx_enclave.mk.in
+--- sgxbench/./sgx_enclave.mk.in	2018-08-07 10:57:34.000000000 +0200
++++ sgxbench1/./sgx_enclave.mk.in	2022-05-02 16:32:45.735526000 +0200
+@@ -13,12 +13,18 @@
+ ENCLAVE_LDFLAGS=-Wl,--no-undefined -nostdlib -nodefaultlibs -nostartfiles \
+ 	-L$(SGXSDK_LIBDIR) \
+ 	-Wl,--whole-archive -l$(SGX_TRTS_LIB) -Wl,--no-whole-archive \
+-	-Wl,--start-group -lsgx_tstdc -lsgx_tstdcxx -lsgx_tcrypto -l$(SGX_TSERVICE_LIB) -Wl,--end-group \
++	-Wl,--start-group -lsgx_tstdc -lsgx_tcrypto -l$(SGX_TSERVICE_LIB) -Wl,--end-group \
+ 	-Wl,-Bstatic -Wl,-Bsymbolic -Wl,--no-undefined \
+ 	-Wl,-pie,-eenclave_entry -Wl,--export-dynamic \
+ 	-Wl,--defsym,__ImageBase=0
+ ENCLAVE_PKEY=$(ENCLAVE)_private.pem
+-ENCLAVE_CFG=$(ENCLAVE).config.xml
++
++ifneq ($(DR),)
++	ENCLAVE_CFG=$(ENCLAVE)_gs.config.xml
++else
++	ENCLAVE_CFG=$(ENCLAVE).config.xml
++endif
++
+ 
+ ENCLAVE_TOBJ= $(ENCLAVE)_t.o
+ ENCLAVE_CLEAN= $(ENCLAVE)_t.o $(ENCLAVE)_t.c $(ENCLAVE)_t.h $(ENCLAVE).so $(ENCLAVE).signed.so
+@@ -34,7 +40,7 @@
+ $(ENCLAVE_SIGNED): @ENCLAVE_SIGN_TARGET@
+ 
+ signed_enclave_dev: $(ENCLAVE_UNSIGNED) $(ENCLAVE_PKEY) $(ENCLAVE_CFG)
+-	$(SGX_SIGN) sign -key $(ENCLAVE_PKEY) -enclave $(ENCLAVE_UNSIGNED) -out $(ENCLAVE_SIGNED) -config $(ENCLAVE_CFG)
++	$(SGX_SIGN) sign -ignore-rel-error -key $(ENCLAVE_PKEY) -enclave $(ENCLAVE_UNSIGNED) -out $(ENCLAVE_SIGNED) -config $(ENCLAVE_CFG)
+ 
+ signed_enclave_rel:
+ 	@echo "--------------------------------------------------------------"
+@@ -49,22 +55,6 @@
+ 	@echo "--------------------------------------------------------------"
+ 
+ 
+-$(ENCLAVE_CFG):
+-	@echo "Creating default enclave configuration file:"
+-	@echo "$(ENCLAVE_CFG)"
+-	@echo "<EnclaveConfiguration>">$(ENCLAVE_CFG)
+-	@echo "	<ProdID>0</ProdID>">>$(ENCLAVE_CFG)
+-	@echo "	<ISVSVN>0</ISVSVN>">>$(ENCLAVE_CFG)
+-	@echo "	<StackMaxSize>0x40000</StackMaxSize>">>$(ENCLAVE_CFG)
+-	@echo "	<HeapMaxSize>0x100000</HeapMaxSize>">>$(ENCLAVE_CFG)
+-	@echo "	<TCSNum>10</TCSNum>">>$(ENCLAVE_CFG)
+-	@echo "	<TCSPolicy>1</TCSPolicy>">>$(ENCLAVE_CFG)
+-	@echo "	<!-- Recommend changing 'DisableDebug' to 1 to make the enclave undebuggable for enclave release -->">>$(ENCLAVE_CFG)
+-	@echo "	<DisableDebug>0</DisableDebug>">>$(ENCLAVE_CFG)
+-	@echo "	<MiscSelect>0</MiscSelect>">>$(ENCLAVE_CFG)
+-	@echo "	<MiscMask>0xFFFFFFFF</MiscMask>">>$(ENCLAVE_CFG)
+-	@echo "	</EnclaveConfiguration>">>$(ENCLAVE_CFG)
+-	@echo ""
+ 
+ $(ENCLAVE_PKEY):
+ 	@echo "Creating random private key file for testing and"

@@ -1,0 +1,3 @@
+#!/bin/bash
+script_directory=`dirname "$0"`
+$script_directory/../compiler/invoke-clang.sh clang++ $@

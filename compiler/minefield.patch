@@ -1,0 +1,444 @@
+diff --git a/llvm/lib/MC/ELFObjectWriter.cpp b/llvm/lib/MC/ELFObjectWriter.cpp
+index 1ca9d0fe1..ed46d0458 100644
+--- a/llvm/lib/MC/ELFObjectWriter.cpp
++++ b/llvm/lib/MC/ELFObjectWriter.cpp
+@@ -638,10 +638,10 @@ void ELFWriter::computeSymbolTable(
+     if (!isInSymtab(Layout, Symbol, Used || WeakrefUsed || isSignature,
+                     OWriter.Renames.count(&Symbol)))
+       continue;
+-
++    // llvm::errs() << Symbol.getName() << '\n';
+     if (Symbol.isTemporary() && Symbol.isUndefined()) {
+-      Ctx.reportError(SMLoc(), "Undefined temporary symbol " + Symbol.getName());
+-      continue;
++        // Ctx.reportError(SMLoc(), "Undefined temporary symbol " + Symbol.getName());
++        continue;
+     }
+ 
+     ELFSymbolData MSD;
+diff --git a/llvm/lib/Target/X86/CMakeLists.txt b/llvm/lib/Target/X86/CMakeLists.txt
+index 729934b29..b3f0e1860 100644
+--- a/llvm/lib/Target/X86/CMakeLists.txt
++++ b/llvm/lib/Target/X86/CMakeLists.txt
+@@ -74,6 +74,7 @@ set(sources
+   X86WinAllocaExpander.cpp
+   X86WinEHState.cpp
+   X86InsertWait.cpp
++  X86FaultHardeningPass.cpp
+   )
+ 
+ add_llvm_target(X86CodeGen ${sources})
+diff --git a/llvm/lib/Target/X86/X86.h b/llvm/lib/Target/X86/X86.h
+index 91ba4e3d0..2c69c1609 100644
+--- a/llvm/lib/Target/X86/X86.h
++++ b/llvm/lib/Target/X86/X86.h
+@@ -144,6 +144,7 @@ FunctionPass *createX86LoadValueInjectionLoadHardeningPass();
+ FunctionPass *createX86LoadValueInjectionRetHardeningPass();
+ FunctionPass *createX86SpeculativeLoadHardeningPass();
+ FunctionPass *createX86SpeculativeExecutionSideEffectSuppression();
++FunctionPass *createX86FaultHardeningPass();
+ 
+ void initializeEvexToVexInstPassPass(PassRegistry &);
+ void initializeFixupBWInstPassPass(PassRegistry &);
+@@ -166,6 +167,7 @@ void initializeX86OptimizeLEAPassPass(PassRegistry &);
+ void initializeX86PartialReductionPass(PassRegistry &);
+ void initializeX86SpeculativeLoadHardeningPassPass(PassRegistry &);
+ void initializeX86SpeculativeExecutionSideEffectSuppressionPass(PassRegistry &);
++void initializeX86FaultHardeningPass(PassRegistry &);
+ 
+ namespace X86AS {
+ enum : unsigned {
+diff --git a/llvm/lib/Target/X86/X86FaultHardeningPass.cpp b/llvm/lib/Target/X86/X86FaultHardeningPass.cpp
+new file mode 100644
+index 000000000..c7e346c9d
+--- /dev/null
++++ b/llvm/lib/Target/X86/X86FaultHardeningPass.cpp
+@@ -0,0 +1,350 @@
++//===- Hello.cpp - Example code from "Writing an LLVM Pass" ---------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// This file implements two versions of the LLVM "Hello World" pass described
++// in docs/WritingAnLLVMPass.html
++//
++//===----------------------------------------------------------------------===//
++#include "X86.h"
++#include "X86InstrBuilder.h"
++#include "X86Subtarget.h"
++
++#include "llvm/ADT/Statistic.h"
++#include "llvm/CodeGen/MachineConstantPool.h"
++#include "llvm/CodeGen/MachineFunctionPass.h"
++#include "llvm/Pass.h"
++#include "llvm/Support/Format.h"
++#include "llvm/Support/RandomNumberGenerator.h"
++#include "llvm/Support/raw_ostream.h"
++
++#include <string>
++#include <tuple>
++#include <unordered_map>
++
++#define NAME       "Minefield"
++#define DEBUG_TYPE NAME
++
++using namespace llvm;
++
++#define MIB_ADD_MEM_CONSTANT(_index)               \
++    addReg(X86::RIP)                  /*base*/     \
++        .addImm(1)                    /*scale*/    \
++        .addReg(X86::NoRegister)      /*index*/    \
++        .addConstantPoolIndex(_index) /*constant*/ \
++        .addReg(X86::NoRegister)      /*segment*/
++
++#define MIB_ADD_MEM_SYMBOL(_symbol)            \
++    addReg(X86::RIP)                /*base*/   \
++        .addImm(1)                  /*scale*/  \
++        .addReg(X86::NoRegister)    /*index*/  \
++        .addExternalSymbol(_symbol) /*symbol*/ \
++        .addReg(X86::NoRegister)    /*segment*/
++
++namespace {
++
++// Commandline Options
++
++// enable mitigation
++static cl::opt<int> cl_percentage("fh-enable", cl::NotHidden, cl::desc(NAME ": palcement density in percent"),
++                                  cl::init(0));
++
++static cl::opt<uint64_t> cl_factor("fh-factor", cl::NotHidden,
++                                   cl::desc(NAME ": multiplication factor used when using IMM"), cl::init(0x11));
++
++// trap type
++enum class FaultTrapType : int { IMUL_IMM, IMUL_MEM };
++
++static cl::opt<FaultTrapType> cl_trap_1(
++    "fh-imul1", cl::desc(NAME ": choose trap type:"),
++    cl::values(cl::OptionEnumValue { "imm", static_cast<int>(FaultTrapType::IMUL_IMM), "use intermediate factor" },
++               cl::OptionEnumValue { "mem", static_cast<int>(FaultTrapType::IMUL_MEM), "use memory load factor" }),
++    cl::init(FaultTrapType::IMUL_MEM));
++
++static cl::opt<FaultTrapType> cl_trap_2(
++    "fh-imul2", cl::desc(NAME ": choose trap type:"),
++    cl::values(cl::OptionEnumValue { "imm", static_cast<int>(FaultTrapType::IMUL_IMM), "use intermediate factor" },
++               cl::OptionEnumValue { "mem", static_cast<int>(FaultTrapType::IMUL_MEM), "use memory load factor" }),
++    cl::init(FaultTrapType::IMUL_MEM));
++
++static cl::opt<uint64_t> cl_seed("fh-seed", cl::NotHidden, cl::desc(NAME ": seed for the placement randomness"),
++                                 cl::init(0xdeadbeaf));
++
++// handling
++enum class HandlingType : int { ABORT, COUNT, PENDING, STICKY };
++
++static cl::opt<HandlingType> cl_handling(
++    "fh-handeling", cl::desc(NAME ": choose the behaviour when a fault ocurred:"),
++    cl::values(cl::OptionEnumValue { "abort", static_cast<int>(HandlingType::ABORT), "call abort handler" },
++               cl::OptionEnumValue { "count", static_cast<int>(HandlingType::COUNT), "count the faults" },
++               cl::OptionEnumValue { "pending", static_cast<int>(HandlingType::PENDING), "mask the bit flips" },
++               cl::OptionEnumValue { "sticky", static_cast<int>(HandlingType::STICKY), "mask the bit flips" }),
++    cl::init(HandlingType::PENDING));
++
++class FaultHardener {
++    uint64_t m_init;
++    uint64_t m_factor;
++
++    MachineFunction &MF;
++
++    X86Subtarget const &   STI;
++    X86RegisterInfo const &TRI;
++    X86InstrInfo const &   TII;
++
++    uint64_t m_trap_count;
++
++    uint32_t m_place_percentage;
++    uint32_t m_place_count;
++
++    std::mt19937                            m_generator;
++    std::uniform_int_distribution<uint32_t> m_distribution;
++
++    void place_init(MachineBasicBlock &MBB, MachineInstr &MI);
++    void place_imul(MachineBasicBlock &MBB, MachineInstr &MI, FaultTrapType type, Register reg);
++    void place_trap(MachineBasicBlock &MBB, MachineInstr &MI);
++    void place_check(MachineBasicBlock &MBB, MachineInstr &MI);
++
++    unsigned generateConstant(uint64_t constant) {
++        IntegerType *type  = IntegerType::getInt64Ty(MF.getFunction().getContext());
++        Constant *   value = ConstantInt::get(type, constant, false);
++        return MF.getConstantPool()->getConstantPoolIndex(value, {});
++    }
++
++    bool randomly_place_trap() {
++        return m_distribution(m_generator) <= m_place_percentage;
++    }
++
++  public:
++    FaultHardener(MachineFunction &MF)
++      : MF { MF }
++      , STI { MF.getSubtarget<X86Subtarget>() }
++      , TRI { *STI.getRegisterInfo() }
++      , TII { *STI.getInstrInfo() }
++      , m_trap_count { 0 }
++      , m_generator {}
++      , m_distribution { 1, 100 } //
++    {
++        uint32_t p         = cl_percentage.getValue();
++        m_place_count      = p / 100;
++        m_place_percentage = p % 100;
++
++        m_generator.seed(cl_seed.getValue());
++    }
++
++    void harden_machine_function();
++};
++
++struct X86FaultHardening : public MachineFunctionPass {
++    static char ID;
++
++    X86FaultHardening()
++      : MachineFunctionPass(ID) {
++    }
++
++    bool runOnMachineFunction(MachineFunction &MF) override {
++        if ( cl_percentage.getValue() == 0 ) {
++            return false;
++        }
++        FaultHardener { MF }.harden_machine_function();
++
++        return true;
++    }
++
++    virtual ~X86FaultHardening() {
++    }
++};
++char X86FaultHardening::ID = 0;
++
++} // namespace
++
++INITIALIZE_PASS(X86FaultHardening, NAME, "X86 Fault Hardening Pass", false, false)
++
++FunctionPass *llvm::createX86FaultHardeningPass() {
++    return new X86FaultHardening();
++}
++
++// Implementation
++
++namespace {
++
++// copied from cmove placement
++static bool eflags_in_use(MachineInstr &MI) {
++    if ( MI.killsRegister(X86::EFLAGS) )
++        return true;
++
++    // The EFLAGS operand of MI might be missing a kill marker.
++    // Figure out whether EFLAGS operand should LIVE after MI instruction.
++    MachineBasicBlock *         BB    = MI.getParent();
++    MachineBasicBlock::iterator ItrMI = MachineBasicBlock::instr_iterator(MI);
++
++    // Scan forward through BB for a use/def of EFLAGS.
++    for ( auto I = ItrMI, E = BB->end(); I != E; ++I ) {
++        if ( I->readsRegister(X86::EFLAGS) )
++            return true;
++        if ( I->definesRegister(X86::EFLAGS) )
++            return false;
++    }
++
++    // We hit the end of the block, check whether EFLAGS is live into a
++    // successor.
++    for ( auto I = BB->succ_begin(), E = BB->succ_end(); I != E; ++I ) {
++        if ( (*I)->isLiveIn(X86::EFLAGS) )
++            return true;
++    }
++
++    return false;
++}
++
++void FaultHardener::harden_machine_function() {
++    if ( !STI.is64Bit() ) {
++        return;
++    }
++
++    for ( MachineBasicBlock &MBB : MF ) {
++        bool do_place_init = true;
++
++        MachineInstr *MI_no_eflags = nullptr;
++
++        for ( MachineInstr &MI : MBB ) {
++            if ( MI.isMetaInstruction() ) {
++                continue;
++            }
++
++            if ( do_place_init ) {
++                place_init(MBB, MI);
++                do_place_init = false;
++            }
++
++            if ( !eflags_in_use(MI) ) {
++
++                // place the fix traps
++                for ( uint32_t i = 0; i < m_place_count; ++i ) {
++                    place_trap(MBB, MI);
++                }
++
++                // place the random traps
++                if ( randomly_place_trap() ) {
++                    place_trap(MBB, MI);
++                }
++
++                MI_no_eflags = &MI;
++            }
++
++            bool is_last = std::next(MI.getIterator()) == MBB.end();
++            bool is_ctf  = MI.isCall() || MI.isReturn() || MI.isBranch();
++            if ( is_ctf || is_last ) {
++                if ( m_trap_count % 2 == 1 ) {
++                    place_trap(MBB, *MI_no_eflags);
++                }
++                if ( MI_no_eflags && m_trap_count == 0 ) {
++                    place_trap(MBB, *MI_no_eflags);
++                    place_trap(MBB, *MI_no_eflags);
++                }
++            }
++        }
++    }
++}
++
++void FaultHardener::place_init(MachineBasicBlock &MBB, MachineInstr &MI) {
++    place_check(MBB, MI);
++    m_trap_count = 0;
++}
++
++void FaultHardener::place_imul(MachineBasicBlock &MBB, MachineInstr &MI, FaultTrapType type, Register reg) {
++    switch ( type ) {
++        case FaultTrapType::IMUL_IMM: {
++            BuildMI(MBB, MI, {}, TII.get(X86::IMUL64rri32)) //
++                .addDef(reg)
++                .addReg(reg)
++                .addImm(cl_factor.getValue());
++            break;
++        }
++        case FaultTrapType::IMUL_MEM: {
++            BuildMI(MBB, MI, {}, TII.get(X86::IMUL64rm)) //
++                .addDef(reg)
++                .addReg(reg)
++                .MIB_ADD_MEM_SYMBOL("__fault_mul_factor");
++            break;
++        }
++    }
++}
++
++void FaultHardener::place_trap(MachineBasicBlock &MBB, MachineInstr &MI) {
++
++    if ( m_trap_count % 2 == 0 ) {
++        place_imul(MBB, MI, cl_trap_1.getValue(), X86::R12);
++    }
++    else {
++        place_imul(MBB, MI, cl_trap_2.getValue(), X86::R13);
++    }
++    m_trap_count++;
++}
++
++void FaultHardener::place_check(MachineBasicBlock &MBB, MachineInstr &MI) {
++    bool eflags_used = eflags_in_use(MI);
++    if ( eflags_used ) {
++        BuildMI(MBB, MI, {}, TII.get(X86::PUSHF64));
++    }
++
++    BuildMI(MBB, MI, {}, TII.get(X86::CMP64rr)) //
++        .addReg(X86::R12)
++        .addReg(X86::R13);
++
++    switch ( cl_handling.getValue() ) {
++        case HandlingType::ABORT:
++            BuildMI(MBB, MI, {}, TII.get(X86::JCC_1)) //
++                .addExternalSymbol("__fault_abort")
++                .addImm(X86::COND_NE);
++            break;
++
++        case HandlingType::COUNT:
++            BuildMI(MBB, MI, {}, TII.get(X86::SETCCr)) //
++                .addDef(X86::R12)
++                .addImm(X86::COND_NE);
++
++            BuildMI(MBB, MI, {}, TII.get(X86::AND64ri32)) //
++                .addDef(X86::R12)
++                .addReg(X86::R12)
++                .addImm(0xFF);
++
++            BuildMI(MBB, MI, {}, TII.get(X86::ADD64mr)) //
++                .MIB_ADD_MEM_SYMBOL("__fault_count")
++                .addReg(X86::R12);
++
++            break;
++
++        case HandlingType::PENDING:
++            BuildMI(MBB, MI, {}, TII.get(X86::SETCCm)) //
++                .MIB_ADD_MEM_SYMBOL("__fault_pending")
++                .addImm(X86::COND_NE);
++            break;
++
++        case HandlingType::STICKY:
++            BuildMI(MBB, MI, {}, TII.get(X86::SETCCr)) //
++                .addDef(X86::R12)
++                .addImm(X86::COND_NE);
++
++            BuildMI(MBB, MI, {}, TII.get(X86::OR8mr)) //
++                .MIB_ADD_MEM_SYMBOL("__fault_pending")
++                .addReg(X86::R12);
++            break;
++    }
++
++    // restore correct state if not aborted
++    if ( cl_handling.getValue() != HandlingType::ABORT ) {
++
++        BuildMI(MBB, MI, {}, TII.get(X86::MOV64rr)) //
++            .addDef(X86::R12)
++            .addReg(X86::R13);
++    }
++
++    if ( eflags_used ) {
++        BuildMI(MBB, MI, {}, TII.get(X86::POPF64));
++    }
++}
++
++} // namespace
+\ No newline at end of file
+diff --git a/llvm/lib/Target/X86/X86RegisterInfo.cpp b/llvm/lib/Target/X86/X86RegisterInfo.cpp
+index f456728cf..af395799b 100644
+--- a/llvm/lib/Target/X86/X86RegisterInfo.cpp
++++ b/llvm/lib/Target/X86/X86RegisterInfo.cpp
+@@ -596,6 +596,12 @@ BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
+     }
+   }
+ 
++  for ( const MCPhysReg &SubReg : subregs_inclusive(X86::R12) )
++      Reserved.set(SubReg);
++
++  for ( const MCPhysReg &SubReg : subregs_inclusive(X86::R13) )
++      Reserved.set(SubReg);
++
+   assert(checkAllSuperRegsMarked(Reserved,
+                                  {X86::SIL, X86::DIL, X86::BPL, X86::SPL,
+                                   X86::SIH, X86::DIH, X86::BPH, X86::SPH}));
+diff --git a/llvm/lib/Target/X86/X86TargetMachine.cpp b/llvm/lib/Target/X86/X86TargetMachine.cpp
+index 7344116e1..b250aa31a 100644
+--- a/llvm/lib/Target/X86/X86TargetMachine.cpp
++++ b/llvm/lib/Target/X86/X86TargetMachine.cpp
+@@ -89,6 +89,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeX86Target() {
+   initializeX86LoadValueInjectionRetHardeningPassPass(PR);
+   initializeX86OptimizeLEAPassPass(PR);
+   initializeX86PartialReductionPass(PR);
++  initializeX86FaultHardeningPass(PR);
+ }
+ 
+ static std::unique_ptr<TargetLoweringObjectFile> createTLOF(const Triple &TT) {
+@@ -552,6 +553,7 @@ void X86PassConfig::addPreEmitPass2() {
+   if (TT.isOSWindows())
+     addPass(createCFGuardLongjmpPass());
+   addPass(createX86LoadValueInjectionRetHardeningPass());
++  addPass(createX86FaultHardeningPass());
+ }
+ 
+ std::unique_ptr<CSEConfigBase> X86PassConfig::getCSEConfig() const {
